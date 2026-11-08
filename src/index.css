@@ -1,0 +1,74 @@
+:root {
+  --glass: rgba(255, 255, 255, 0.42);
+  --glass-strong: rgba(255, 255, 255, 0.58);
+  --glass-edge: rgba(255, 255, 255, 0.62);
+  --glass-inset: rgba(255, 255, 255, 0.78);
+  --glass-dark: rgba(18, 22, 28, 0.38);
+  --text: rgba(15, 18, 24, 0.92);
+  --text-soft: rgba(15, 18, 24, 0.52);
+  --red: #e11d48;
+  --blue: #2563eb;
+  --accent: #ff3b30;
+  --radius: 28px;
+  --blur: 42px;
+  --sat: 190%;
+
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", sans-serif;
+  color: var(--text);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100dvh;
+}
+body {
+  overscroll-behavior-y: none;
+  background:
+    radial-gradient(1200px 800px at 8% -8%, #8ec5ff 0%, transparent 52%),
+    radial-gradient(900px 700px at 108% 4%, #ffb1c9 0%, transparent 48%),
+    radial-gradient(800px 640px at 78% 108%, #9ef0c8 0%, transparent 52%),
+    radial-gradient(700px 520px at 0% 78%, #d7b8ff 0%, transparent 46%),
+    radial-gradient(600px 480px at 52% 42%, #fff6 0%, transparent 58%),
+    #c9daf0;
+}
+html:has(.match-mode),
+body:has(.match-mode) {
+  background:
+    radial-gradient(900px 640px at 12% -10%, #3b6ea8 0%, transparent 50%),
+    radial-gradient(800px 600px at 110% 8%, #7a3d66 0%, transparent 48%),
+    radial-gradient(700px 560px at 70% 120%, #1f5c4a 0%, transparent 50%),
+    #0d1218;
+}
+
+h1, h2, h3, p { overflow-wrap: anywhere; }
+h1, h2, .serif {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+  font-weight: 700;
+  letter-spacing: -.03em;
+}
+button, input, select, textarea { font: inherit; }
+button, label { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; }
+input, select, textarea {
+  border: 1px solid rgba(255,255,255,.45);
+  border-radius: 16px;
+  min-height: 46px;
+  padding: 10px 14px;
+  color: var(--text);
+  background: rgba(255,255,255,.28);
+  backdrop-filter: blur(18px) saturate(var(--sat));
+  -webkit-backdrop-filter: blur(18px) saturate(var(--sat));
+  outline: none;
+}
+textarea { min-height: 88px; resize: vertical; width: 100%; }
+input:focus, select:focus, textarea:focus {
+  border-color: rgba(255,255,255,.8);
+  box-shadow: 0 0 0 4px rgba(255,255,255,.22);
+}
+h2 { font-size: 1.2rem; }
+h3 { font-size: .95rem; font-weight: 600; }
