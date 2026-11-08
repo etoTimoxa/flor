@@ -569,6 +569,15 @@ function PlayersPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  const removePlayer = async (player: Player) => {
+    if (!confirm(`Удалить ${player.name} из состава?`)) return
+    await db.players.delete(player.id)
+    if (editingId === player.id) {
+      setEditingId(null)
+      setName('')
+    }
+  }
+
   return (
     <>
       <PageHeading title="Состав" />
@@ -579,13 +588,13 @@ function PlayersPage() {
       </form>
       <div className="list">
         {players.map((player) => (
-          <article className={`list-card ${player.active ? '' : 'archived'}`} key={player.id}>
+          <article className="list-card" key={player.id}>
             <PlayerAvatar avatarId={player.avatarId} size={52} />
             <div className="grow">
               <strong>{player.name}</strong>
             </div>
             <button className="icon-button" onClick={() => edit(player)}>Изм.</button>
-            <button className="icon-button" onClick={() => db.players.update(player.id, { active: !player.active })}>{player.active ? 'Скрыть' : 'Вернуть'}</button>
+            <button className="icon-button danger" onClick={() => void removePlayer(player)}>Удалить</button>
           </article>
         ))}
         {!players.length && <div className="empty-state"><h2>Список пуст</h2></div>}
@@ -643,6 +652,11 @@ function HistoryCard({ match, players }: { match: FloorballMatch; players: Playe
   const removeGoal = async (goalId: string) => {
     if (!confirm('Удалить этот гол?')) return
     await db.matches.update(match.id, { goals: match.goals.filter((goal) => goal.id !== goalId) })
+  }
+
+  const removeMatch = async () => {
+    if (!confirm('Удалить матч из журнала?')) return
+    await db.matches.delete(match.id)
   }
 
   return (
@@ -710,6 +724,7 @@ function HistoryCard({ match, players }: { match: FloorballMatch; players: Playe
             <input aria-label="Номер тайма" type="number" min="1" max={Math.max(1, periods)} value={period} onChange={(event) => setPeriod(Number(event.target.value))} />
             <button onClick={addMissingGoal}>Добавить</button>
           </div>
+          <button className="danger-button" onClick={() => void removeMatch()}>Удалить матч</button>
         </div>
       )}
     </article>
