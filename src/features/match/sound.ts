@@ -6,7 +6,6 @@ function getHorn() {
   if (!horn) {
     horn = new Audio(hornUrl)
     horn.preload = 'auto'
-    horn.playsInline = true
     horn.setAttribute('playsinline', 'true')
   }
   return horn
