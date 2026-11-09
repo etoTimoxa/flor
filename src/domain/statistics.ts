@@ -52,6 +52,73 @@ export interface MatchJournalRow {
   notes: string
 }
 
+export interface PlayerSeasonStat {
+  playerId: string
+  games: number
+  goals: number
+  wins: number
+  draws: number
+  losses: number
+}
+
+export function teamSeasonStats(matches: FloorballMatch[]) {
+  const completed = matches.filter((match) => match.status === 'completed')
+  let redWins = 0
+  let blueWins = 0
+  let draws = 0
+  let redGoals = 0
+  let blueGoals = 0
+  for (const match of completed) {
+    const winner = winnerOf(match)
+    if (winner === 'red') redWins += 1
+    else if (winner === 'blue') blueWins += 1
+    else draws += 1
+    redGoals += scoreOf(match, 'red')
+    blueGoals += scoreOf(match, 'blue')
+  }
+  return {
+    matches: completed.length,
+    redWins,
+    blueWins,
+    draws,
+    redGoals,
+    blueGoals,
+    goals: redGoals + blueGoals,
+  }
+}
+
+export function playerSeasonStats(matches: FloorballMatch[], players: Player[]): PlayerSeasonStat[] {
+  const completed = matches.filter((match) => match.status === 'completed')
+  const stats = new Map<string, PlayerSeasonStat>()
+  const ensure = (id: string) => {
+    const current = stats.get(id)
+    if (current) return current
+    const created = { playerId: id, games: 0, goals: 0, wins: 0, draws: 0, losses: 0 }
+    stats.set(id, created)
+    return created
+  }
+
+  for (const player of players) ensure(player.id)
+
+  for (const match of completed) {
+    const winner = winnerOf(match)
+    const ids = new Set([...match.redPlayerIds, ...match.bluePlayerIds])
+    for (const id of ids) {
+      const row = ensure(id)
+      row.games += 1
+      const onRed = match.redPlayerIds.includes(id)
+      if (winner === 'draw') row.draws += 1
+      else if ((winner === 'red' && onRed) || (winner === 'blue' && !onRed)) row.wins += 1
+      else row.losses += 1
+    }
+    for (const goal of match.goals) {
+      if (goal.playerId) ensure(goal.playerId).goals += 1
+    }
+  }
+
+  return [...stats.values()].filter((row) => row.games > 0 || row.goals > 0)
+}
+
 export function matchJournal(matches: FloorballMatch[], players: Player[]): MatchJournalRow[] {
   return matches
     .filter((match) => match.status === 'completed')

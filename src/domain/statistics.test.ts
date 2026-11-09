@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { goalsText, matchJournal, playedPeriods, winnerLabel } from './statistics'
+import { goalsText, matchJournal, playedPeriods, playerSeasonStats, teamSeasonStats, winnerLabel } from './statistics'
 import type { FloorballMatch, Player } from './types'
 
 const players: Player[] = [
@@ -49,5 +49,19 @@ describe('match journal', () => {
 
   it('ignores unfinished matches', () => {
     expect(matchJournal([{ ...match, status: 'active' }], players)).toEqual([])
+  })
+
+  it('builds goal and win grids from completed matches', () => {
+    expect(teamSeasonStats([match, { ...match, status: 'active' }])).toMatchObject({
+      matches: 1,
+      redWins: 1,
+      blueWins: 0,
+      draws: 0,
+      redGoals: 2,
+      blueGoals: 1,
+    })
+    const [anna, boris] = playerSeasonStats([match], players)
+    expect(anna).toMatchObject({ playerId: 'a', games: 1, goals: 1, wins: 1, losses: 0 })
+    expect(boris).toMatchObject({ playerId: 'b', games: 1, goals: 1, wins: 0, losses: 1 })
   })
 })

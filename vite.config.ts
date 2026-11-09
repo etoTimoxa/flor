@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['floorball-icon.svg', 'apple-touch-icon.png', 'haikei-bg.svg'],
+      includeAssets: ['floorball-icon.svg', 'apple-touch-icon.png', 'haikei-bg.svg', 'horn.mp3'],
       manifest: {
         name: 'Флор',
         short_name: 'Флор',
@@ -42,7 +42,7 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         navigateFallback: 'index.html',
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,woff2,mp3}'],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/i,

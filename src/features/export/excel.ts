@@ -1,6 +1,7 @@
 import {
   playedPeriods,
   playerName,
+  playerSeasonStats,
   rosterText,
   scoreOf,
   winnerLabel,
@@ -150,6 +151,35 @@ export async function exportMatchesToExcel(matches: FloorballMatch[], players: P
     usedNames.add(name)
     XLSX.utils.book_append_sheet(workbook, sheet, name)
   })
+
+  const stats = playerSeasonStats(completed, players)
+  const goalsSheet = [
+    ['Место', 'Игрок', 'Голы', 'Игры', 'Голов за игру'],
+    ...[...stats].sort((left, right) => right.goals - left.goals || right.games - left.games).map((row, index) => [
+      index + 1,
+      playerName(players, row.playerId),
+      row.goals,
+      row.games,
+      row.games ? Math.round((row.goals / row.games) * 10) / 10 : 0,
+    ]),
+  ]
+  const winsSheet = [
+    ['Место', 'Игрок', 'Игры', 'Победы', 'Ничьи', 'Поражения'],
+    ...[...stats].sort((left, right) => right.wins - left.wins || right.draws - left.draws || right.games - left.games).map((row, index) => [
+      index + 1,
+      playerName(players, row.playerId),
+      row.games,
+      row.wins,
+      row.draws,
+      row.losses,
+    ]),
+  ]
+  const goals = XLSX.utils.aoa_to_sheet(goalsSheet)
+  goals['!cols'] = columnWidths(goalsSheet)
+  XLSX.utils.book_append_sheet(workbook, goals, 'Голы')
+  const wins = XLSX.utils.aoa_to_sheet(winsSheet)
+  wins['!cols'] = columnWidths(winsSheet)
+  XLSX.utils.book_append_sheet(workbook, wins, 'Победы')
 
   const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer
   downloadBlob(

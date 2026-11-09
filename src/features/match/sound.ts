@@ -1,34 +1,45 @@
-let audioContext: AudioContext | null = null
+const hornUrl = `${import.meta.env.BASE_URL}horn.mp3`
+
+let horn: HTMLAudioElement | null = null
+
+function getHorn() {
+  if (!horn) {
+    horn = new Audio(hornUrl)
+    horn.preload = 'auto'
+    horn.playsInline = true
+    horn.setAttribute('playsinline', 'true')
+  }
+  return horn
+}
 
 export async function unlockAudio(): Promise<void> {
+  const audio = getHorn()
   try {
-    audioContext ??= new AudioContext()
-    if (audioContext.state === 'suspended') await audioContext.resume()
-    const oscillator = audioContext.createOscillator()
-    const gain = audioContext.createGain()
-    gain.gain.value = 0.0001
-    oscillator.connect(gain).connect(audioContext.destination)
-    oscillator.start()
-    oscillator.stop(audioContext.currentTime + 0.02)
+    audio.muted = true
+    await audio.play()
+    audio.pause()
+    audio.currentTime = 0
+    audio.muted = false
   } catch {
-    // iOS or headless browsers may reject audio until a later gesture.
+    // iOS may still block until a later gesture.
   }
 }
 
 export async function playFinalHorn(): Promise<void> {
-  await unlockAudio()
-  if (!audioContext) return
-  const start = audioContext.currentTime
-  for (const offset of [0, 0.45, 0.9]) {
-    const oscillator = audioContext.createOscillator()
-    const gain = audioContext.createGain()
-    oscillator.type = 'square'
-    oscillator.frequency.setValueAtTime(740, start + offset)
-    gain.gain.setValueAtTime(0.0001, start + offset)
-    gain.gain.exponentialRampToValueAtTime(0.35, start + offset + 0.02)
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.32)
-    oscillator.connect(gain).connect(audioContext.destination)
-    oscillator.start(start + offset)
-    oscillator.stop(start + offset + 0.34)
+  const audio = getHorn()
+  try {
+    audio.muted = false
+    audio.volume = 1
+    audio.currentTime = 0
+    await audio.play()
+  } catch {
+    await unlockAudio()
+    try {
+      audio.muted = false
+      audio.currentTime = 0
+      await audio.play()
+    } catch {
+      // Safari can still refuse if the last gesture is gone.
+    }
   }
 }

@@ -22,7 +22,9 @@ import {
   goalsText,
   playedPeriods,
   playerName,
+  playerSeasonStats,
   scoreOf,
+  teamSeasonStats,
   winnerLabel,
 } from './domain/statistics'
 import {
@@ -605,23 +607,102 @@ function PlayersPage() {
 
 function HistoryPage() {
   const { players, matches } = useAppData()
+  const [tab, setTab] = useState<'matches' | 'goals' | 'wins'>('matches')
   const completed = matches
     .filter((match) => match.status === 'completed')
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+  const season = teamSeasonStats(completed)
+  const stats = playerSeasonStats(completed, players)
 
   return (
     <>
       <PageHeading title="Журнал" />
       {!!completed.length && (
-        <button className="primary-button excel-button" onClick={() => void exportMatchesToExcel(completed, players)}>
-          Скачать Excel
-        </button>
+        <>
+          <div className="stat-strip">
+            <span>{season.matches} матч.</span>
+            <span>{season.goals} гол.</span>
+            <span className="red-text">К {season.redWins}</span>
+            <span className="blue-text">С {season.blueWins}</span>
+            <span>Н {season.draws}</span>
+          </div>
+          <div className="journal-tabs">
+            <button className={tab === 'matches' ? 'active' : ''} onClick={() => setTab('matches')}>Матчи</button>
+            <button className={tab === 'goals' ? 'active' : ''} onClick={() => setTab('goals')}>Голы</button>
+            <button className={tab === 'wins' ? 'active' : ''} onClick={() => setTab('wins')}>Победы</button>
+          </div>
+          <button className="primary-button excel-button" onClick={() => void exportMatchesToExcel(completed, players)}>
+            Скачать Excel
+          </button>
+        </>
       )}
-      <div className="list">
-        {completed.map((match) => <HistoryCard key={match.id} match={match} players={players} />)}
-        {!completed.length && <div className="empty-state"><h2>Журнал пуст</h2></div>}
-      </div>
+      {tab === 'matches' && (
+        <div className="list">
+          {completed.map((match) => <HistoryCard key={match.id} match={match} players={players} />)}
+          {!completed.length && <div className="empty-state"><h2>Журнал пуст</h2></div>}
+        </div>
+      )}
+      {tab === 'goals' && (
+        <StatsTable
+          rows={[...stats].sort((left, right) => right.goals - left.goals || right.games - left.games)}
+          players={players}
+          columns={['Г', 'И', 'Г/и']}
+          values={(row) => [row.goals, row.games, row.games ? (row.goals / row.games).toFixed(1) : '0']}
+        />
+      )}
+      {tab === 'wins' && (
+        <StatsTable
+          rows={[...stats].sort((left, right) => right.wins - left.wins || right.draws - left.draws || right.games - left.games)}
+          players={players}
+          columns={['И', 'В', 'Н', 'П']}
+          values={(row) => [row.games, row.wins, row.draws, row.losses]}
+        />
+      )}
     </>
+  )
+}
+
+function StatsTable({
+  rows,
+  players,
+  columns,
+  values,
+}: {
+  rows: ReturnType<typeof playerSeasonStats>
+  players: Player[]
+  columns: string[]
+  values: (row: ReturnType<typeof playerSeasonStats>[number]) => Array<string | number>
+}) {
+  if (!rows.length) return <div className="empty-state"><h2>Пока нет статистики</h2></div>
+  return (
+    <div className="card stat-card">
+      <table className="stat-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Игрок</th>
+            {columns.map((column) => <th key={column}>{column}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => {
+            const player = players.find((item) => item.id === row.playerId)
+            return (
+              <tr key={row.playerId}>
+                <td>{index + 1}</td>
+                <td>
+                  <span className="stat-player">
+                    <PlayerAvatar avatarId={player?.avatarId} size={28} />
+                    {playerName(players, row.playerId)}
+                  </span>
+                </td>
+                {values(row).map((value, cell) => <td key={cell}>{value}</td>)}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
