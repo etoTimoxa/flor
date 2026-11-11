@@ -1,22 +1,21 @@
 import { DEFAULT_SETTINGS, type BackupPayload } from '../domain/types'
-import { db, importBackup, readTombstones } from './database'
+import { applySharedState, db, readTombstones } from './database'
 import { canonicalize, fingerprint, mergePayloads } from './merge'
 
 const DEFAULT_SYNC_URL = 'https://s3.regru.cloud/flor/state.json'
 const configuredUrl = import.meta.env.VITE_SYNC_URL
 const SYNC_URL = configuredUrl === '' ? '' : (configuredUrl || DEFAULT_SYNC_URL)
-const PUSH_COOLDOWN_MS = 1500
+const LAST_OK_KEY = 'flor-sync-ok'
+const LAST_FP_KEY = 'flor-sync-fp'
+const FETCH_MS = 12000
 
 let started = false
-let pushing = false
-let pulling = false
-let paused = false
-let pendingPush = false
+let busy = false
 let lastFingerprint = ''
 let lastOkAt = 0
-let lastPushAt = 0
 let lastError = ''
 let pushTimer: ReturnType<typeof setTimeout> | undefined
+let queue: Promise<void> = Promise.resolve()
 
 function canSync() {
   return Boolean(SYNC_URL)
@@ -30,6 +29,16 @@ function notify() {
   window.dispatchEvent(new Event('flor-sync'))
 }
 
+function loadPersisted() {
+  try {
+    lastOkAt = Number(localStorage.getItem(LAST_OK_KEY)) || 0
+    lastFingerprint = localStorage.getItem(LAST_FP_KEY) || ''
+  } catch {
+    lastOkAt = 0
+    lastFingerprint = ''
+  }
+}
+
 export function isCloudSyncEnabled() {
   return canSync()
 }
@@ -39,7 +48,7 @@ export function getCloudSyncInfo() {
     enabled: canSync(),
     lastOkAt,
     lastError,
-    busy: pushing || pulling,
+    busy,
   }
 }
 
@@ -66,79 +75,41 @@ function markOk(fp: string) {
   lastFingerprint = fp
   lastOkAt = Date.now()
   lastError = ''
+  try {
+    localStorage.setItem(LAST_OK_KEY, String(lastOkAt))
+    localStorage.setItem(LAST_FP_KEY, fp)
+  } catch {
+    // Private mode can block storage; memory still keeps the successful sync.
+  }
   notify()
 }
 
-async function fetchSync(url: string, init: RequestInit = {}) {
-  return fetch(url, { credentials: 'omit', ...init })
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
+async function fetchSync(url: string, init: RequestInit = {}): Promise<Response | null> {
+  const result = await Promise.race([
+    fetch(url, { credentials: 'omit', ...init }).then((response) => response, () => null),
+    sleep(FETCH_MS).then(() => 'timeout' as const),
+  ])
+  if (!result || result === 'timeout') return null
+  return result
 }
 
 function hasLiveMatch(payload: BackupPayload) {
   return payload.matches.some((match) => match.status !== 'completed')
 }
 
-async function pull() {
-  if (!canSync() || paused || pushing || pulling) return
-  if (lastPushAt && Date.now() - lastPushAt < PUSH_COOLDOWN_MS) return
-  pulling = true
-  notify()
-  try {
-    const response = await fetchSync(`${SYNC_URL}?t=${Date.now()}`)
-    if (response.status === 404) {
-      pulling = false
-      await push()
-      return
-    }
-    if (!response.ok) {
-      lastError = `Не удалось прочитать общую базу (${response.status})`
-      notify()
-      return
-    }
-    const remoteRaw = await response.json() as unknown
-    if (!isPayload(remoteRaw)) {
-      lastError = 'Общая база вернула непонятные данные'
-      notify()
-      return
-    }
-    const localPayload = await readLocal()
-    const remote = canonicalize(remoteRaw)
-    const merged = canonicalize(mergePayloads(localPayload, remote))
-    const remoteFp = fingerprint(remote)
-    const localFp = fingerprint(localPayload)
-    const mergedFp = fingerprint(merged)
-    if (mergedFp === localFp && mergedFp === remoteFp) {
-      markOk(mergedFp)
-      return
-    }
-    if (mergedFp !== localFp && !hasLiveMatch(localPayload)) {
-      paused = true
-      await importBackup(merged)
-      paused = false
-    }
-    const latest = await readLocal()
-    const latestMerged = canonicalize(mergePayloads(latest, remote))
-    const latestFp = fingerprint(latestMerged)
-    if (latestFp !== fingerprint(remote)) {
-      await pushPayload(latestMerged)
-      return
-    }
-    markOk(latestFp)
-  } catch {
-    lastError = 'Нет связи с общей базой'
-    notify()
-  } finally {
-    paused = false
-    pulling = false
-    notify()
-    if (pendingPush) {
-      pendingPush = false
-      queueCloudPush()
-    }
-  }
+function enqueue(task: () => Promise<void>) {
+  const run = queue.then(task, task)
+  queue = run.then(() => undefined, () => undefined)
+  return run
 }
 
 async function pushPayload(payload: BackupPayload) {
-  if (!canSync() || paused) return
   const canonical = canonicalize({ ...payload, exportedAt: new Date().toISOString() })
   const fp = fingerprint(canonical)
   if (fp === lastFingerprint) {
@@ -150,38 +121,61 @@ async function pushPayload(payload: BackupPayload) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(canonical),
   })
-  if (response.ok) {
-    lastPushAt = Date.now()
-    markOk(fp)
-  } else {
-    lastError = `Не удалось записать в общую базу (${response.status})`
-    notify()
-  }
+  if (!response) return
+  if (response.ok) markOk(fp)
 }
 
-async function push() {
-  if (!canSync() || paused || pushing) return
-  pushing = true
+async function syncRound(forcePush = false) {
+  if (!canSync()) return
+  busy = true
   notify()
   try {
-    await pushPayload(await readLocal())
+    const localPayload = await readLocal()
+    const response = await fetchSync(`${SYNC_URL}?t=${Date.now()}`)
+    if (!response || !response.ok) {
+      if (forcePush || localPayload.matches.length || localPayload.players.length) {
+        await pushPayload(localPayload)
+      }
+      return
+    }
+    const remoteRaw = await response.json() as unknown
+    if (!isPayload(remoteRaw)) {
+      await pushPayload(localPayload)
+      return
+    }
+    const remote = canonicalize(remoteRaw)
+    const merged = canonicalize(mergePayloads(localPayload, remote))
+    const localFp = fingerprint(localPayload)
+    const remoteFp = fingerprint(remote)
+    const mergedFp = fingerprint(merged)
+    if (mergedFp === localFp && mergedFp === remoteFp) {
+      markOk(mergedFp)
+      return
+    }
+    if (mergedFp !== localFp && !hasLiveMatch(localPayload)) {
+      await applySharedState(merged)
+    }
+    const latest = hasLiveMatch(localPayload) ? localPayload : await readLocal()
+    const latestMerged = canonicalize(mergePayloads(latest, remote))
+    if (forcePush || fingerprint(latestMerged) !== remoteFp) {
+      await pushPayload(latestMerged)
+      return
+    }
+    markOk(fingerprint(latestMerged))
   } catch {
-    lastError = 'Нет связи с общей базой'
-    notify()
+    // Keep the last successful state on screen; the next round will retry.
   } finally {
-    pushing = false
+    busy = false
     notify()
   }
 }
 
 export function queueCloudPush() {
   if (!canSync()) return
-  if (paused) {
-    pendingPush = true
-    return
-  }
   if (pushTimer) clearTimeout(pushTimer)
-  pushTimer = setTimeout(() => { void push() }, 400)
+  pushTimer = setTimeout(() => {
+    void enqueue(() => syncRound(true))
+  }, 400)
 }
 
 export async function flushCloudPush() {
@@ -190,18 +184,22 @@ export async function flushCloudPush() {
     clearTimeout(pushTimer)
     pushTimer = undefined
   }
-  pendingPush = false
-  paused = false
-  await push()
+  await enqueue(() => syncRound(true))
 }
 
 export function startCloudSync() {
   if (started || !canSync()) return
   started = true
-  void pull()
-  window.setInterval(() => { void pull() }, 4000)
-  window.addEventListener('online', () => { void pull(); void push() })
+  loadPersisted()
+  notify()
+  void enqueue(() => syncRound(false))
+  window.setInterval(() => {
+    void enqueue(() => syncRound(false))
+  }, 5000)
+  window.addEventListener('online', () => {
+    void enqueue(() => syncRound(true))
+  })
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') void pull()
+    if (document.visibilityState === 'visible') void enqueue(() => syncRound(false))
   })
 }

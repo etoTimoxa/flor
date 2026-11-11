@@ -250,6 +250,45 @@ export async function importBackup(value: unknown): Promise<void> {
   }
 }
 
+export async function applySharedState(value: BackupPayload): Promise<void> {
+  const taken: string[] = []
+  const players = value.players.map((player) => {
+    const avatarId = player.avatarId || pickAvatar(taken)
+    taken.push(avatarId)
+    return { ...player, avatarId, note: player.note ?? '' }
+  })
+  const matches = value.matches.map((match) => ({
+    ...match,
+    notes: match.notes ?? '',
+    periodCount: match.periodCount ?? match.currentPeriod ?? 0,
+  }))
+  const playerIds = new Set(players.map((player) => player.id))
+  const matchIds = new Set(matches.map((match) => match.id))
+  snapshotPaused = true
+  try {
+    writeTombstones(value.deletedPlayerIds ?? [], value.deletedMatchIds ?? [])
+    await db.transaction('rw', db.players, db.matches, db.settings, async () => {
+      const [localPlayers, localMatches] = await Promise.all([
+        db.players.toArray(),
+        db.matches.toArray(),
+      ])
+      await Promise.all([
+        ...localPlayers.filter((player) => !playerIds.has(player.id)).map((player) => db.players.delete(player.id)),
+        ...localMatches.filter((match) => !matchIds.has(match.id)).map((match) => db.matches.delete(match.id)),
+      ])
+      if (players.length) await db.players.bulkPut(players)
+      if (matches.length) await db.matches.bulkPut(matches)
+      await db.settings.put({
+        id: 'main',
+        periodMinutes: value.settings.periodMinutes || DEFAULT_SETTINGS.periodMinutes,
+        soundEnabled: value.settings.soundEnabled !== false,
+      })
+    })
+  } finally {
+    snapshotPaused = false
+  }
+}
+
 export async function clearAllData(): Promise<void> {
   snapshotPaused = true
   if (snapshotTimer) clearTimeout(snapshotTimer)
