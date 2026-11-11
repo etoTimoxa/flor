@@ -69,14 +69,8 @@ function markOk(fp: string) {
   notify()
 }
 
-async function fetchSync(url: string, init: RequestInit, timeoutMs = 8000) {
-  const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    return await fetch(url, { ...init, signal: controller.signal })
-  } finally {
-    window.clearTimeout(timer)
-  }
+async function fetchSync(url: string, init: RequestInit = {}) {
+  return fetch(url, { credentials: 'omit', ...init })
 }
 
 function hasLiveMatch(payload: BackupPayload) {
@@ -89,7 +83,7 @@ async function pull() {
   pulling = true
   notify()
   try {
-    const response = await fetchSync(`${SYNC_URL}?t=${Date.now()}`, { cache: 'no-store', credentials: 'omit' })
+    const response = await fetchSync(`${SYNC_URL}?t=${Date.now()}`)
     if (response.status === 404) {
       pulling = false
       await push()
@@ -153,8 +147,6 @@ async function pushPayload(payload: BackupPayload) {
   }
   const response = await fetchSync(SYNC_URL, {
     method: 'PUT',
-    cache: 'no-store',
-    credentials: 'omit',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(canonical),
   })
@@ -199,10 +191,6 @@ export async function flushCloudPush() {
     pushTimer = undefined
   }
   pendingPush = false
-  const startedWait = Date.now()
-  while ((paused || pulling || pushing) && Date.now() - startedWait < 8000) {
-    await new Promise((resolve) => window.setTimeout(resolve, 40))
-  }
   paused = false
   await push()
 }

@@ -42,8 +42,13 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         navigateFallback: 'index.html',
+        navigateFallbackDenylist: [/^https:\/\/s3\.regru\.cloud\//i],
         globPatterns: ['**/*.{js,css,html,svg,png,woff2,mp3}'],
         runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/s3\.regru\.cloud\//i,
+            handler: 'NetworkOnly',
+          },
           {
             urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/i,
             handler: 'CacheFirst',
