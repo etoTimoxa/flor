@@ -45,7 +45,6 @@ export const db = new FloorballDatabase()
 const SNAPSHOT_KEY = 'flor-local-backup'
 let snapshotPaused = false
 let snapshotTimer: ReturnType<typeof setTimeout> | undefined
-let cloudBusy = false
 
 function snapshotStore() {
   try {
@@ -212,13 +211,8 @@ async function commit(mutator: (state: BackupPayload) => void) {
     await applySharedState(local)
     return
   }
-  cloudBusy = true
-  try {
-    const state = await mutateStore(mutator)
-    await applySharedState(state)
-  } finally {
-    cloudBusy = false
-  }
+  const state = await mutateStore(mutator)
+  await applySharedState(state)
 }
 
 export async function createPlayer(player: Player) {
