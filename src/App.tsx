@@ -129,7 +129,7 @@ function SyncBadge() {
     window.addEventListener('flor-sync', refresh)
     window.addEventListener('online', refresh)
     window.addEventListener('offline', refresh)
-    const timer = window.setInterval(refresh, 4000)
+    const timer = window.setInterval(refresh, 1000)
     return () => {
       window.removeEventListener('flor-sync', refresh)
       window.removeEventListener('online', refresh)

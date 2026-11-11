@@ -5,17 +5,16 @@ import { canonicalize, fingerprint, mergePayloads } from './merge'
 const DEFAULT_SYNC_URL = 'https://s3.regru.cloud/flor/state.json'
 const configuredUrl = import.meta.env.VITE_SYNC_URL
 const SYNC_URL = configuredUrl === '' ? '' : (configuredUrl || DEFAULT_SYNC_URL)
-const LAST_OK_KEY = 'flor-sync-ok'
-const LAST_FP_KEY = 'flor-sync-fp'
-const FETCH_MS = 12000
+const RESET_KEY = 'flor-sync-reset'
 
 let started = false
-let busy = false
+let pushing = false
+let pulling = false
+let paused = false
 let lastFingerprint = ''
 let lastOkAt = 0
 let lastError = ''
 let pushTimer: ReturnType<typeof setTimeout> | undefined
-let queue: Promise<void> = Promise.resolve()
 
 function canSync() {
   return Boolean(SYNC_URL)
@@ -29,13 +28,16 @@ function notify() {
   window.dispatchEvent(new Event('flor-sync'))
 }
 
-function loadPersisted() {
+function resetStaleDeviceState() {
   try {
-    lastOkAt = Number(localStorage.getItem(LAST_OK_KEY)) || 0
-    lastFingerprint = localStorage.getItem(LAST_FP_KEY) || ''
+    if (localStorage.getItem(RESET_KEY) === '4') return
+    localStorage.removeItem('flor-sync-fp')
+    localStorage.removeItem('flor-sync-ok')
+    localStorage.removeItem('flor-tombstones')
+    localStorage.setItem(RESET_KEY, '4')
   } catch {
-    lastOkAt = 0
     lastFingerprint = ''
+    lastOkAt = 0
   }
 }
 
@@ -48,7 +50,7 @@ export function getCloudSyncInfo() {
     enabled: canSync(),
     lastOkAt,
     lastError,
-    busy,
+    busy: pushing || pulling,
   }
 }
 
@@ -75,74 +77,54 @@ function markOk(fp: string) {
   lastFingerprint = fp
   lastOkAt = Date.now()
   lastError = ''
-  try {
-    localStorage.setItem(LAST_OK_KEY, String(lastOkAt))
-    localStorage.setItem(LAST_FP_KEY, fp)
-  } catch {
-    // Private mode can block storage; memory still keeps the successful sync.
-  }
   notify()
-}
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, ms)
-  })
-}
-
-async function fetchSync(url: string, init: RequestInit = {}): Promise<Response | null> {
-  const result = await Promise.race([
-    fetch(url, { credentials: 'omit', ...init }).then((response) => response, () => null),
-    sleep(FETCH_MS).then(() => 'timeout' as const),
-  ])
-  if (!result || result === 'timeout') return null
-  return result
 }
 
 function hasLiveMatch(payload: BackupPayload) {
   return payload.matches.some((match) => match.status !== 'completed')
 }
 
-function enqueue(task: () => Promise<void>) {
-  const run = queue.then(task, task)
-  queue = run.then(() => undefined, () => undefined)
-  return run
-}
-
 async function pushPayload(payload: BackupPayload) {
+  if (!canSync() || paused) return
   const canonical = canonicalize({ ...payload, exportedAt: new Date().toISOString() })
   const fp = fingerprint(canonical)
   if (fp === lastFingerprint) {
     markOk(fp)
     return
   }
-  const response = await fetchSync(SYNC_URL, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(canonical),
-  })
-  if (!response) return
-  if (response.ok) markOk(fp)
-}
-
-async function syncRound(forcePush = false) {
-  if (!canSync()) return
-  busy = true
+  pushing = true
   notify()
   try {
-    const localPayload = await readLocal()
-    const response = await fetchSync(`${SYNC_URL}?t=${Date.now()}`)
-    if (!response || !response.ok) {
-      if (forcePush || localPayload.matches.length || localPayload.players.length) {
-        await pushPayload(localPayload)
-      }
+    const response = await fetch(SYNC_URL, {
+      method: 'PUT',
+      credentials: 'omit',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(canonical),
+    })
+    if (response.ok) markOk(fp)
+    else lastError = 'нет связи'
+  } catch {
+    lastError = 'нет связи'
+  } finally {
+    pushing = false
+    notify()
+  }
+}
+
+async function pull() {
+  if (!canSync() || paused || pushing || pulling) return
+  pulling = true
+  notify()
+  try {
+    const response = await fetch(`${SYNC_URL}?t=${Date.now()}`, { credentials: 'omit' })
+    if (!response.ok) {
+      lastError = 'нет связи'
+      notify()
       return
     }
     const remoteRaw = await response.json() as unknown
-    if (!isPayload(remoteRaw)) {
-      await pushPayload(localPayload)
-      return
-    }
+    if (!isPayload(remoteRaw)) return
+    const localPayload = await readLocal()
     const remote = canonicalize(remoteRaw)
     const merged = canonicalize(mergePayloads(localPayload, remote))
     const localFp = fingerprint(localPayload)
@@ -152,30 +134,40 @@ async function syncRound(forcePush = false) {
       markOk(mergedFp)
       return
     }
-    if (mergedFp !== localFp && !hasLiveMatch(localPayload)) {
-      await applySharedState(merged)
-    }
-    const latest = hasLiveMatch(localPayload) ? localPayload : await readLocal()
-    const latestMerged = canonicalize(mergePayloads(latest, remote))
-    if (forcePush || fingerprint(latestMerged) !== remoteFp) {
-      await pushPayload(latestMerged)
+    if (hasLiveMatch(localPayload)) {
+      pulling = false
+      await pushPayload(localPayload)
       return
     }
-    markOk(fingerprint(latestMerged))
+    if (mergedFp !== localFp) {
+      paused = true
+      await applySharedState(merged)
+      paused = false
+    }
+    if (mergedFp !== remoteFp) {
+      pulling = false
+      await pushPayload(merged)
+      return
+    }
+    markOk(mergedFp)
   } catch {
-    // Keep the last successful state on screen; the next round will retry.
+    lastError = 'нет связи'
   } finally {
-    busy = false
+    paused = false
+    pulling = false
     notify()
   }
 }
 
+async function push() {
+  if (!canSync() || paused || pushing) return
+  await pushPayload(await readLocal())
+}
+
 export function queueCloudPush() {
-  if (!canSync()) return
+  if (!canSync() || paused) return
   if (pushTimer) clearTimeout(pushTimer)
-  pushTimer = setTimeout(() => {
-    void enqueue(() => syncRound(true))
-  }, 400)
+  pushTimer = setTimeout(() => { void push() }, 250)
 }
 
 export async function flushCloudPush() {
@@ -184,22 +176,18 @@ export async function flushCloudPush() {
     clearTimeout(pushTimer)
     pushTimer = undefined
   }
-  await enqueue(() => syncRound(true))
+  paused = false
+  await push()
 }
 
 export function startCloudSync() {
   if (started || !canSync()) return
   started = true
-  loadPersisted()
-  notify()
-  void enqueue(() => syncRound(false))
-  window.setInterval(() => {
-    void enqueue(() => syncRound(false))
-  }, 5000)
-  window.addEventListener('online', () => {
-    void enqueue(() => syncRound(true))
-  })
+  resetStaleDeviceState()
+  void pull()
+  window.setInterval(() => { void pull() }, 2500)
+  window.addEventListener('online', () => { void pull(); void push() })
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') void enqueue(() => syncRound(false))
+    if (document.visibilityState === 'visible') void pull()
   })
 }
