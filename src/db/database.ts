@@ -45,7 +45,6 @@ export const db = new FloorballDatabase()
 const SNAPSHOT_KEY = 'flor-local-backup'
 let snapshotPaused = false
 let snapshotTimer: ReturnType<typeof setTimeout> | undefined
-let cloudStarted = false
 let cloudBusy = false
 
 function snapshotStore() {
@@ -178,26 +177,16 @@ async function restoreLocalSnapshotIfEmpty() {
   }
 }
 
-async function refreshFromCloud() {
-  if (!canUseCloud() || cloudBusy) return
-  try {
-    const state = await readStore()
-    await applySharedState(state, { preserveRunningMatch: true })
-  } catch {
-    // Keep the last local copy if the store is unreachable.
+export async function loadFromStore(): Promise<void> {
+  if (!canUseCloud()) {
+    await restoreLocalSnapshotIfEmpty()
+    return
   }
-}
-
-export function startCloudStore() {
-  if (cloudStarted || !canUseCloud()) return
-  cloudStarted = true
-  void refreshFromCloud()
-  window.setInterval(() => { void refreshFromCloud() }, 3000)
+  const state = await readStore()
+  await applySharedState(state)
 }
 
 export async function getSettings(): Promise<AppSettings> {
-  await restoreLocalSnapshotIfEmpty()
-  startCloudStore()
   const existing = await db.settings.get('main')
   if (existing) {
     return {

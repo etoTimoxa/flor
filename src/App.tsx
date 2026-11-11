@@ -27,11 +27,12 @@ import {
   exportBackup,
   getSettings,
   importBackup,
+  loadFromStore,
   saveSettings,
   updateMatch,
   updatePlayer,
 } from './db/database'
-import { getCloudSyncInfo, isCloudSyncEnabled } from './db/sync'
+import { isCloudSyncEnabled } from './db/sync'
 import {
   goalsText,
   playedPeriods,
@@ -81,17 +82,39 @@ function PlayerAvatar({ avatarId, size = 42 }: { avatarId?: string; size?: numbe
 function Shell() {
   const location = useLocation()
   const matchMode = location.pathname === '/match'
+  const [boot, setBoot] = useState<'loading' | 'ready' | 'error'>('loading')
 
   useEffect(() => {
-    void getSettings()
+    let cancelled = false
+    void (async () => {
+      try {
+        await loadFromStore()
+        await getSettings()
+        if (!cancelled) setBoot('ready')
+      } catch {
+        if (!cancelled) setBoot('error')
+      }
+    })()
+    return () => { cancelled = true }
   }, [])
+
+  if (boot === 'loading') {
+    return <div className="empty-state"><p>Загружаем данные из хранилища…</p></div>
+  }
+  if (boot === 'error') {
+    return (
+      <div className="empty-state">
+        <h2>Не удалось загрузить данные</h2>
+        <button className="primary-button" onClick={() => window.location.reload()}>Повторить</button>
+      </div>
+    )
+  }
 
   return (
     <div className={`app-shell ${matchMode ? 'match-mode' : ''}`}>
       <header className="topbar">
         <img className="brand-mark" src={`${import.meta.env.BASE_URL}apple-touch-icon.png`} alt="" width={34} height={34} />
         <strong>Флор</strong>
-        <SyncBadge />
       </header>
       <main className="page">
         <Routes>
@@ -133,32 +156,6 @@ function useAppData() {
     activeMatch,
     loading,
   }
-}
-
-function SyncBadge() {
-  const [info, setInfo] = useState(() => getCloudSyncInfo())
-  useEffect(() => {
-    const refresh = () => setInfo(getCloudSyncInfo())
-    window.addEventListener('flor-sync', refresh)
-    window.addEventListener('online', refresh)
-    window.addEventListener('offline', refresh)
-    const timer = window.setInterval(refresh, 1000)
-    return () => {
-      window.removeEventListener('flor-sync', refresh)
-      window.removeEventListener('online', refresh)
-      window.removeEventListener('offline', refresh)
-      window.clearInterval(timer)
-    }
-  }, [])
-  if (!info.enabled) return null
-  const label = !navigator.onLine
-    ? 'офлайн'
-    : info.lastError && !info.lastOkAt
-      ? 'нет связи'
-      : info.lastOkAt
-        ? 'общая база'
-        : 'синхронизация'
-  return <span className={`sync-pill ${(!navigator.onLine || (info.lastError && !info.lastOkAt)) ? 'warn' : ''}`}>{label}</span>
 }
 
 function PageHeading({ title, subtitle }: { title: string; subtitle?: string }) {
@@ -901,7 +898,7 @@ function SettingsPage() {
       <section className="card settings-list">
         <p>
           {isCloudSyncEnabled()
-            ? 'Добавление, правка и удаление сразу пишутся в общее хранилище. Другие телефоны подтягивают это при открытии.'
+            ? 'При входе данные берутся из общего хранилища. Добавление, правка и удаление сразу пишутся туда же.'
             : 'Общая база сейчас выключена: данные остаются только на этом телефоне.'}
         </p>
         <label>

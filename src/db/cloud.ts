@@ -49,7 +49,7 @@ function isPayload(value: unknown): value is BackupPayload {
   return Array.isArray(payload.players) && Array.isArray(payload.matches) && !!payload.settings
 }
 
-function fetchCloud(init: RequestInit = {}, timeoutMs = 8000) {
+function fetchCloud(init: RequestInit = {}, timeoutMs = 15000) {
   return Promise.race([
     fetch(SYNC_URL, { credentials: 'omit', mode: 'cors', ...init }),
     new Promise<Response>((_, reject) => {
