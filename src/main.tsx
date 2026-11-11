@@ -12,6 +12,11 @@ if (import.meta.env.PROD) {
     },
     onRegisteredSW(_url, registration) {
       if (!registration) return
+      void caches.keys().then((keys) => {
+        keys
+          .filter((key) => /s3|flor-sync/i.test(key))
+          .forEach((key) => { void caches.delete(key) })
+      })
       void registration.update()
       window.setInterval(() => { void registration.update() }, 15_000)
     },

@@ -46,10 +46,6 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff2,mp3}'],
         runtimeCaching: [
           {
-            urlPattern: /^https:\/\/s3\.regru\.cloud\//i,
-            handler: 'NetworkOnly',
-          },
-          {
             urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/i,
             handler: 'CacheFirst',
             options: {

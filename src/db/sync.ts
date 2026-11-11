@@ -30,11 +30,11 @@ function notify() {
 
 function resetStaleDeviceState() {
   try {
-    if (localStorage.getItem(RESET_KEY) === '4') return
+    if (localStorage.getItem(RESET_KEY) === '5') return
     localStorage.removeItem('flor-sync-fp')
     localStorage.removeItem('flor-sync-ok')
     localStorage.removeItem('flor-tombstones')
-    localStorage.setItem(RESET_KEY, '4')
+    localStorage.setItem(RESET_KEY, '5')
   } catch {
     lastFingerprint = ''
     lastOkAt = 0
@@ -73,8 +73,8 @@ function isPayload(value: unknown): value is BackupPayload {
   return Array.isArray(payload.players) && Array.isArray(payload.matches) && !!payload.settings
 }
 
-function markOk(fp: string) {
-  lastFingerprint = fp
+function markOk(fp?: string) {
+  if (fp) lastFingerprint = fp
   lastOkAt = Date.now()
   lastError = ''
   notify()
@@ -82,6 +82,15 @@ function markOk(fp: string) {
 
 function hasLiveMatch(payload: BackupPayload) {
   return payload.matches.some((match) => match.status !== 'completed')
+}
+
+function timedFetch(url: string, init: RequestInit = {}, timeoutMs = 6000) {
+  return Promise.race([
+    fetch(url, { credentials: 'omit', mode: 'cors', ...init }),
+    new Promise<Response>((_, reject) => {
+      window.setTimeout(() => reject(new Error('timeout')), timeoutMs)
+    }),
+  ])
 }
 
 async function pushPayload(payload: BackupPayload) {
@@ -95,16 +104,14 @@ async function pushPayload(payload: BackupPayload) {
   pushing = true
   notify()
   try {
-    const response = await fetch(SYNC_URL, {
+    const response = await timedFetch(SYNC_URL, {
       method: 'PUT',
-      credentials: 'omit',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(canonical),
-    })
-    if (response.ok) markOk(fp)
-    else lastError = 'нет связи'
+    }, 8000)
+    if (response?.ok) markOk(fp)
   } catch {
-    lastError = 'нет связи'
+    // Retry on the next interval instead of locking the badge.
   } finally {
     pushing = false
     notify()
@@ -116,14 +123,11 @@ async function pull() {
   pulling = true
   notify()
   try {
-    const response = await fetch(`${SYNC_URL}?t=${Date.now()}`, { credentials: 'omit' })
-    if (!response.ok) {
-      lastError = 'нет связи'
-      notify()
-      return
-    }
+    const response = await timedFetch(SYNC_URL)
+    if (!response.ok) return
     const remoteRaw = await response.json() as unknown
     if (!isPayload(remoteRaw)) return
+    markOk()
     const localPayload = await readLocal()
     const remote = canonicalize(remoteRaw)
     const merged = canonicalize(mergePayloads(localPayload, remote))
@@ -151,7 +155,7 @@ async function pull() {
     }
     markOk(mergedFp)
   } catch {
-    lastError = 'нет связи'
+    // Keep retrying; a timeout on iPhone must not freeze the badge.
   } finally {
     paused = false
     pulling = false
