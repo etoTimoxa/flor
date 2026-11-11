@@ -18,6 +18,7 @@ import {
 } from 'react-router-dom'
 import { avatarById, pickAvatar } from './domain/avatars'
 import { clearAllData, db, exportBackup, getSettings, importBackup } from './db/database'
+import { getCloudSyncInfo, isCloudSyncEnabled } from './db/sync'
 import {
   goalsText,
   playedPeriods,
@@ -77,6 +78,7 @@ function Shell() {
       <header className="topbar">
         <img className="brand-mark" src={`${import.meta.env.BASE_URL}apple-touch-icon.png`} alt="" width={34} height={34} />
         <strong>Флор</strong>
+        <SyncBadge />
       </header>
       <main className="page">
         <Routes>
@@ -118,6 +120,32 @@ function useAppData() {
     activeMatch,
     loading,
   }
+}
+
+function SyncBadge() {
+  const [info, setInfo] = useState(() => getCloudSyncInfo())
+  useEffect(() => {
+    const refresh = () => setInfo(getCloudSyncInfo())
+    window.addEventListener('flor-sync', refresh)
+    window.addEventListener('online', refresh)
+    window.addEventListener('offline', refresh)
+    const timer = window.setInterval(refresh, 4000)
+    return () => {
+      window.removeEventListener('flor-sync', refresh)
+      window.removeEventListener('online', refresh)
+      window.removeEventListener('offline', refresh)
+      window.clearInterval(timer)
+    }
+  }, [])
+  if (!info.enabled) return null
+  const label = !navigator.onLine
+    ? 'офлайн'
+    : info.lastError
+      ? 'нет связи'
+      : info.lastOkAt
+        ? 'общая база'
+        : 'синхронизация'
+  return <span className={`sync-pill ${info.lastError || !navigator.onLine ? 'warn' : ''}`}>{label}</span>
 }
 
 function PageHeading({ title, subtitle }: { title: string; subtitle?: string }) {
@@ -850,6 +878,11 @@ function SettingsPage() {
     <>
       <PageHeading title="Ещё" />
       <section className="card settings-list">
+        <p>
+          {isCloudSyncEnabled()
+            ? 'Игроки, матчи и журнал общие для всех, кто открывает сайт. Изменения с одного телефона появляются на других через пару секунд.'
+            : 'Общая база сейчас выключена: данные остаются только на этом телефоне.'}
+        </p>
         <label>
           <span><b>Финальный сигнал</b></span>
           <input type="checkbox" checked={settings.soundEnabled} onChange={(event) => db.settings.put({ ...settings, soundEnabled: event.target.checked, id: 'main' })} />

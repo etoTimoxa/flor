@@ -27,6 +27,20 @@
   z-index: 20;
 }
 .topbar strong { font-size: 17px; font-weight: 650; }
+.sync-pill {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(46, 160, 90, .16);
+  color: #135c32;
+}
+.sync-pill.warn {
+  background: rgba(196, 120, 40, .16);
+  color: #7a4b12;
+}
 .brand-mark {
   width: 34px; height: 34px; object-fit: cover;
   border-radius: 10px;
@@ -354,6 +368,7 @@
 .notes-box { display: block; text-align: left; font-size: 12px; margin: 12px 0; color: inherit; }
 .notes-box textarea { margin-top: 6px; }
 
+.settings-list p { color: var(--text-soft); font-size: 14px; line-height: 1.5; margin: 0 0 8px; }
 .settings-list label { display: flex; justify-content: space-between; align-items: center; gap: 15px; padding: 12px 0; }
 .settings-list label > span { display: flex; flex-direction: column; }
 .settings-list small { color: var(--text-soft); margin-top: 3px; }

@@ -7,6 +7,7 @@ import {
   type FloorballMatch,
   type Player,
 } from '../domain/types'
+import { queueCloudPush, startCloudSync } from './sync'
 
 class FloorballDatabase extends Dexie {
   players!: EntityTable<Player, 'id'>
@@ -67,11 +68,14 @@ async function saveLocalSnapshot() {
 }
 
 function queueSnapshot() {
-  if (snapshotPaused || !snapshotStore()) return
-  if (snapshotTimer) clearTimeout(snapshotTimer)
-  snapshotTimer = setTimeout(() => {
-    void saveLocalSnapshot()
-  }, 300)
+  if (snapshotPaused) return
+  if (snapshotStore()) {
+    if (snapshotTimer) clearTimeout(snapshotTimer)
+    snapshotTimer = setTimeout(() => {
+      void saveLocalSnapshot()
+    }, 300)
+  }
+  queueCloudPush()
 }
 
 db.use({
@@ -115,6 +119,7 @@ async function restoreLocalSnapshotIfEmpty() {
 
 export async function getSettings(): Promise<AppSettings> {
   await restoreLocalSnapshotIfEmpty()
+  startCloudSync()
   const existing = await db.settings.get('main')
   if (existing) {
     return {
@@ -193,5 +198,6 @@ export async function clearAllData(): Promise<void> {
     snapshotStore()?.removeItem(SNAPSHOT_KEY)
   } finally {
     snapshotPaused = false
+    queueCloudPush()
   }
 }
