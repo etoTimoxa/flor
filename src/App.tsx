@@ -82,32 +82,24 @@ function PlayerAvatar({ avatarId, size = 42 }: { avatarId?: string; size?: numbe
 function Shell() {
   const location = useLocation()
   const matchMode = location.pathname === '/match'
-  const [boot, setBoot] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [boot, setBoot] = useState<'loading' | 'ready'>('loading')
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
       try {
         await loadFromStore()
-        await getSettings()
-        if (!cancelled) setBoot('ready')
       } catch {
-        if (!cancelled) setBoot('error')
+        // Local copy is enough if the store is unreachable.
       }
+      await getSettings()
+      if (!cancelled) setBoot('ready')
     })()
     return () => { cancelled = true }
   }, [])
 
   if (boot === 'loading') {
     return <div className="empty-state"><p>Загружаем данные из хранилища…</p></div>
-  }
-  if (boot === 'error') {
-    return (
-      <div className="empty-state">
-        <h2>Не удалось загрузить данные</h2>
-        <button className="primary-button" onClick={() => window.location.reload()}>Повторить</button>
-      </div>
-    )
   }
 
   return (
@@ -898,7 +890,7 @@ function SettingsPage() {
       <section className="card settings-list">
         <p>
           {isCloudSyncEnabled()
-            ? 'При входе данные берутся из общего хранилища. Добавление, правка и удаление сразу пишутся туда же.'
+            ? 'При входе данные берутся из общего хранилища. Если оно недоступно, приложение работает с копией на этом телефоне и выгружает изменения, когда связь появится.'
             : 'Общая база сейчас выключена: данные остаются только на этом телефоне.'}
         </p>
         <label>

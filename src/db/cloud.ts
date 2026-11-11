@@ -15,6 +15,12 @@ export function canUseCloud() {
     && import.meta.env.MODE !== 'test'
 }
 
+export function canReachCloud() {
+  if (!canUseCloud()) return false
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return false
+  return true
+}
+
 export function getCloudSyncInfo() {
   return {
     enabled: canUseCloud(),

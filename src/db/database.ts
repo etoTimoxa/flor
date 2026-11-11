@@ -7,7 +7,7 @@ import {
   type FloorballMatch,
   type Player,
 } from '../domain/types'
-import { canUseCloud, mutateStore, readStore } from './cloud'
+import { canReachCloud, canUseCloud, readStore, writeStore } from './cloud'
 
 class FloorballDatabase extends Dexie {
   players!: EntityTable<Player, 'id'>
@@ -43,8 +43,14 @@ class FloorballDatabase extends Dexie {
 export const db = new FloorballDatabase()
 
 const SNAPSHOT_KEY = 'flor-local-backup'
+const PENDING_KEY = 'flor-pending-upload'
 let snapshotPaused = false
 let snapshotTimer: ReturnType<typeof setTimeout> | undefined
+let dataEpoch = 0
+let writeGeneration = 0
+let watchingCloud = false
+let cloudWrite: Promise<void> = Promise.resolve()
+let pendingMemory = false
 
 function snapshotStore() {
   try {
@@ -156,14 +162,51 @@ export async function applySharedState(
     })
   } finally {
     snapshotPaused = false
+    await saveLocalSnapshot()
   }
+}
+
+function hasPendingUpload() {
+  return pendingMemory || snapshotStore()?.getItem(PENDING_KEY) === '1'
+}
+
+function setPendingUpload() {
+  pendingMemory = true
+  snapshotStore()?.setItem(PENDING_KEY, '1')
+}
+
+function clearPendingUpload() {
+  pendingMemory = false
+  snapshotStore()?.removeItem(PENDING_KEY)
+}
+
+export function resetUploadState() {
+  pendingMemory = false
+  dataEpoch = 0
+  writeGeneration += 1
+  cloudWrite = Promise.resolve()
+  snapshotStore()?.removeItem(PENDING_KEY)
+}
+
+async function currentLocal(): Promise<BackupPayload> {
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    players: await db.players.toArray(),
+    matches: await db.matches.toArray(),
+    settings: (await db.settings.get('main')) ?? DEFAULT_SETTINGS,
+  }
+}
+
+async function hasLocalData() {
+  const [playerCount, matchCount] = await Promise.all([db.players.count(), db.matches.count()])
+  return playerCount + matchCount > 0
 }
 
 async function restoreLocalSnapshotIfEmpty() {
   const store = snapshotStore()
   if (!store) return
-  const [playerCount, matchCount] = await Promise.all([db.players.count(), db.matches.count()])
-  if (playerCount || matchCount) return
+  if (await hasLocalData()) return
   const raw = store.getItem(SNAPSHOT_KEY)
   if (!raw) return
   try {
@@ -176,13 +219,80 @@ async function restoreLocalSnapshotIfEmpty() {
   }
 }
 
-export async function loadFromStore(): Promise<void> {
-  if (!canUseCloud()) {
-    await restoreLocalSnapshotIfEmpty()
+function watchCloudReconnect() {
+  if (watchingCloud || typeof window === 'undefined') return
+  watchingCloud = true
+  window.addEventListener('online', () => { void flushPendingUpload() })
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void flushPendingUpload()
+  })
+}
+
+export async function flushPendingUpload(): Promise<void> {
+  if (!hasPendingUpload() || !canReachCloud()) return
+  const generation = writeGeneration
+  const task = async () => {
+    if (generation !== writeGeneration || !hasPendingUpload() || !canReachCloud()) return
+    await writeStore(await currentLocal())
+    if (generation === writeGeneration) clearPendingUpload()
+  }
+  cloudWrite = cloudWrite.then(task, task)
+  try {
+    await cloudWrite
+  } catch {
+    if (generation === writeGeneration) setPendingUpload()
+  }
+}
+
+async function enqueueCloudPut() {
+  if (!canReachCloud()) {
+    setPendingUpload()
     return
   }
+  const epoch = dataEpoch
+  const generation = writeGeneration
+  const task = async () => {
+    if (generation !== writeGeneration) return
+    if (!canReachCloud()) {
+      setPendingUpload()
+      return
+    }
+    await writeStore(await currentLocal())
+    if (generation === writeGeneration && epoch === dataEpoch) clearPendingUpload()
+  }
+  cloudWrite = cloudWrite.then(task, task)
+  try {
+    await cloudWrite
+  } catch {
+    if (generation === writeGeneration) setPendingUpload()
+  }
+}
+
+async function refreshFromCloud() {
+  if (!canReachCloud() || hasPendingUpload()) return
+  const epoch = dataEpoch
   const state = await readStore()
+  if (epoch !== dataEpoch || hasPendingUpload()) return
   await applySharedState(state)
+}
+
+export async function loadFromStore(): Promise<void> {
+  watchCloudReconnect()
+  await restoreLocalSnapshotIfEmpty()
+  if (!canReachCloud()) return
+  if (hasPendingUpload()) {
+    void flushPendingUpload()
+    return
+  }
+  if (await hasLocalData()) {
+    void refreshFromCloud().catch(() => undefined)
+    return
+  }
+  try {
+    await applySharedState(await readStore())
+  } catch {
+    await restoreLocalSnapshotIfEmpty()
+  }
 }
 
 export async function getSettings(): Promise<AppSettings> {
@@ -199,20 +309,14 @@ export async function getSettings(): Promise<AppSettings> {
 }
 
 async function commit(mutator: (state: BackupPayload) => void) {
-  if (!canUseCloud()) {
-    const local: BackupPayload = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      players: await db.players.toArray(),
-      matches: await db.matches.toArray(),
-      settings: (await db.settings.get('main')) ?? DEFAULT_SETTINGS,
-    }
-    mutator(local)
-    await applySharedState(local)
-    return
-  }
-  const state = await mutateStore(mutator)
-  await applySharedState(state)
+  const local = await currentLocal()
+  mutator(local)
+  local.exportedAt = new Date().toISOString()
+  dataEpoch += 1
+  await applySharedState(local)
+  if (!canUseCloud()) return
+  setPendingUpload()
+  void enqueueCloudPut()
 }
 
 export async function createPlayer(player: Player) {
@@ -279,7 +383,7 @@ export async function exportBackup(): Promise<BackupPayload> {
 
 export async function importBackup(value: unknown, options: { skipCloud?: boolean } = {}): Promise<void> {
   if (!isBackup(value)) throw new Error('Файл не похож на резервную копию приложения.')
-  if (options.skipCloud || !canUseCloud()) {
+  if (options.skipCloud) {
     await applySharedState(value)
     return
   }
