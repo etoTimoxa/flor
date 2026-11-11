@@ -54,6 +54,8 @@ export interface BackupPayload {
   players: Player[]
   matches: FloorballMatch[]
   settings: AppSettings
+  deletedPlayerIds?: string[]
+  deletedMatchIds?: string[]
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {

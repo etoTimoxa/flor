@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, type BackupPayload } from '../domain/types'
-import { db, importBackup } from './database'
+import { db, importBackup, readTombstones } from './database'
+import { fingerprint, mergePayloads } from './merge'
 
 const DEFAULT_SYNC_URL = 'https://s3.regru.cloud/flor/state.json'
 const configuredUrl = import.meta.env.VITE_SYNC_URL
@@ -9,18 +10,11 @@ let started = false
 let pushing = false
 let pulling = false
 let paused = false
+let pendingPush = false
 let lastFingerprint = ''
 let lastOkAt = 0
 let lastError = ''
 let pushTimer: ReturnType<typeof setTimeout> | undefined
-
-function fingerprint(payload: BackupPayload) {
-  return JSON.stringify({
-    players: payload.players,
-    matches: payload.matches,
-    settings: payload.settings,
-  })
-}
 
 function canSync() {
   return Boolean(SYNC_URL)
@@ -47,12 +41,15 @@ export function getCloudSyncInfo() {
 }
 
 async function readLocal(): Promise<BackupPayload> {
+  const tombstones = readTombstones()
   return {
     version: 1,
     exportedAt: new Date().toISOString(),
     players: await db.players.toArray(),
     matches: await db.matches.toArray(),
     settings: (await db.settings.get('main')) ?? DEFAULT_SETTINGS,
+    deletedPlayerIds: tombstones.players,
+    deletedMatchIds: tombstones.matches,
   }
 }
 
@@ -62,11 +59,18 @@ function isPayload(value: unknown): value is BackupPayload {
   return Array.isArray(payload.players) && Array.isArray(payload.matches) && !!payload.settings
 }
 
+function markOk(fp: string) {
+  lastFingerprint = fp
+  lastOkAt = Date.now()
+  lastError = ''
+  notify()
+}
+
 async function pull() {
   if (!canSync() || paused || pushing || pulling) return
   pulling = true
   try {
-    const response = await fetch(SYNC_URL, { cache: 'no-store', credentials: 'omit' })
+    const response = await fetch(`${SYNC_URL}?t=${Date.now()}`, { cache: 'no-store', credentials: 'omit' })
     if (response.status === 404) {
       pulling = false
       await push()
@@ -83,40 +87,36 @@ async function pull() {
       notify()
       return
     }
-    const fp = fingerprint(remote)
     const localPayload = await readLocal()
-    const local = fingerprint(localPayload)
-    if (fp === local) {
-      lastFingerprint = fp
-      lastOkAt = Date.now()
-      lastError = ''
-      notify()
+    const merged = mergePayloads(localPayload, remote)
+    const remoteFp = fingerprint(remote)
+    const localFp = fingerprint(localPayload)
+    const mergedFp = fingerprint(merged)
+    if (mergedFp === localFp && mergedFp === remoteFp) {
+      markOk(mergedFp)
       return
     }
-    const remoteEmpty = remote.players.length === 0 && remote.matches.length === 0
-    const localHasData = localPayload.players.length > 0 || localPayload.matches.length > 0
-    if (remoteEmpty && localHasData) {
+    if (mergedFp !== localFp) {
+      paused = true
+      await importBackup(merged)
+    }
+    if (mergedFp !== remoteFp) {
       pulling = false
+      paused = false
       await push()
       return
     }
-    if (lastFingerprint && local !== lastFingerprint) {
-      pulling = false
-      await push()
-      return
-    }
-    paused = true
-    await importBackup(remote)
-    lastFingerprint = fp
-    lastOkAt = Date.now()
-    lastError = ''
-    notify()
+    markOk(mergedFp)
   } catch {
     lastError = 'Нет связи с общей базой'
     notify()
   } finally {
     paused = false
     pulling = false
+    if (pendingPush) {
+      pendingPush = false
+      queueCloudPush()
+    }
   }
 }
 
@@ -137,10 +137,7 @@ async function push() {
       body: JSON.stringify(payload),
     })
     if (response.ok) {
-      lastFingerprint = fp
-      lastOkAt = Date.now()
-      lastError = ''
-      notify()
+      markOk(fp)
     } else {
       lastError = `Не удалось записать в общую базу (${response.status})`
       notify()
@@ -154,7 +151,11 @@ async function push() {
 }
 
 export function queueCloudPush() {
-  if (!canSync() || paused) return
+  if (!canSync()) return
+  if (paused) {
+    pendingPush = true
+    return
+  }
   if (pushTimer) clearTimeout(pushTimer)
   pushTimer = setTimeout(() => { void push() }, 400)
 }
