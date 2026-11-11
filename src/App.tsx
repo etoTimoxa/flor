@@ -17,8 +17,21 @@ import {
   useNavigate,
 } from 'react-router-dom'
 import { avatarById, pickAvatar } from './domain/avatars'
-import { clearAllData, db, exportBackup, getSettings, importBackup } from './db/database'
-import { flushCloudPush, getCloudSyncInfo, isCloudSyncEnabled } from './db/sync'
+import {
+  clearAllData,
+  createMatch,
+  createPlayer,
+  db,
+  deleteMatch,
+  deletePlayer,
+  exportBackup,
+  getSettings,
+  importBackup,
+  saveSettings,
+  updateMatch,
+  updatePlayer,
+} from './db/database'
+import { getCloudSyncInfo, isCloudSyncEnabled } from './db/sync'
 import {
   goalsText,
   playedPeriods,
@@ -230,7 +243,7 @@ function NewMatch({ players }: { players: Player[] }) {
       startedAt: new Date().toISOString(),
       endedAt: null,
     }
-    await db.matches.add(match)
+    await createMatch(match)
     navigate('/match', { state: { matchId: match.id } })
   }
 
@@ -348,7 +361,7 @@ function MatchPage() {
   useEffect(() => {
     if (!activeMatch || !activeMatch.timer.running || remaining > 0 || timeoutHandled.current) return
     timeoutHandled.current = true
-    void db.matches.update(activeMatch.id, {
+    void updateMatch(activeMatch.id, {
       status: 'period-break',
       timer: pauseTimer(activeMatch.timer),
     }).then(() => {
@@ -374,7 +387,7 @@ function MatchPage() {
 
   const togglePause = async () => {
     if (idle) return
-    await db.matches.update(activeMatch.id, {
+    await updateMatch(activeMatch.id, {
       timer: activeMatch.timer.running ? pauseTimer(activeMatch.timer) : resumeTimer(activeMatch.timer),
     })
     setNow(Date.now())
@@ -384,8 +397,9 @@ function MatchPage() {
     if (!goalTeam) return
     const period = Math.max(1, activeMatch.currentPeriod)
     const elapsedSeconds = Math.max(0, activeMatch.periodDurationSeconds - remaining)
-    await db.matches.update(activeMatch.id, {
-      goals: [...activeMatch.goals, {
+    await updateMatch(activeMatch.id, (match) => ({
+      ...match,
+      goals: [...match.goals, {
         id: createId(),
         team: goalTeam,
         playerId,
@@ -393,7 +407,7 @@ function MatchPage() {
         elapsedSeconds,
         createdAt: new Date().toISOString(),
       }],
-    })
+    }))
     const who = playerName(players, playerId)
     setFlash(`${goalTeam === 'red' ? 'Красные' : 'Синие'} · ${who}`)
     window.setTimeout(() => setFlash(''), 1800)
@@ -405,8 +419,8 @@ function MatchPage() {
     const seconds = Math.max(1, minutes) * 60
     const nextPeriod = activeMatch.currentPeriod + 1
     await unlockAudio()
-    await db.settings.put({ ...settings, periodMinutes: minutes, id: 'main' })
-    await db.matches.update(activeMatch.id, {
+    await saveSettings({ periodMinutes: minutes })
+    await updateMatch(activeMatch.id, {
       status: 'active',
       currentPeriod: nextPeriod,
       periodCount: nextPeriod,
@@ -423,23 +437,25 @@ function MatchPage() {
   const finishMatch = async () => {
     if (!confirm('Завершить матч и сохранить в журнал?')) return
     setFinishing(true)
-    await db.matches.update(activeMatch.id, {
+    await updateMatch(activeMatch.id, {
       status: 'completed',
       periodCount: playedPeriods(activeMatch),
       endedAt: new Date().toISOString(),
       timer: pauseTimer(activeMatch.timer),
     })
-    await flushCloudPush()
     navigate('/history')
   }
 
   const removeLastGoal = async () => {
     if (!activeMatch.goals.length) return
-    await db.matches.update(activeMatch.id, { goals: activeMatch.goals.slice(0, -1) })
+    await updateMatch(activeMatch.id, (match) => ({
+      ...match,
+      goals: match.goals.slice(0, -1),
+    }))
   }
 
   const saveNotes = (notes: string) => {
-    void db.matches.update(activeMatch.id, { notes })
+    void updateMatch(activeMatch.id, { notes })
   }
 
   const openGoal = () => {
@@ -579,9 +595,9 @@ function PlayersPage() {
     const trimmed = name.trim()
     if (!trimmed) return
     if (editingId) {
-      await db.players.update(editingId, { name: trimmed })
+      await updatePlayer(editingId, { name: trimmed })
     } else {
-      await db.players.add({
+      await createPlayer({
         id: createId(),
         name: trimmed,
         note: '',
@@ -602,7 +618,7 @@ function PlayersPage() {
 
   const removePlayer = async (player: Player) => {
     if (!confirm(`Удалить ${player.name} из состава?`)) return
-    await db.players.delete(player.id)
+    await deletePlayer(player.id)
     if (editingId === player.id) {
       setEditingId(null)
       setName('')
@@ -746,8 +762,9 @@ function HistoryCard({ match, players }: { match: FloorballMatch; players: Playe
   const periods = playedPeriods(match)
 
   const addMissingGoal = async () => {
-    await db.matches.update(match.id, {
-      goals: [...match.goals, {
+    await updateMatch(match.id, (current) => ({
+      ...current,
+      goals: [...current.goals, {
         id: createId(),
         team,
         playerId: playerId || null,
@@ -755,18 +772,21 @@ function HistoryCard({ match, players }: { match: FloorballMatch; players: Playe
         elapsedSeconds: 0,
         createdAt: new Date().toISOString(),
       }],
-    })
+    }))
     setPlayerId('')
   }
 
   const removeGoal = async (goalId: string) => {
     if (!confirm('Удалить этот гол?')) return
-    await db.matches.update(match.id, { goals: match.goals.filter((goal) => goal.id !== goalId) })
+    await updateMatch(match.id, (current) => ({
+      ...current,
+      goals: current.goals.filter((goal) => goal.id !== goalId),
+    }))
   }
 
   const removeMatch = async () => {
     if (!confirm('Удалить матч из журнала?')) return
-    await db.matches.delete(match.id)
+    await deleteMatch(match.id)
   }
 
   return (
@@ -817,7 +837,7 @@ function HistoryCard({ match, players }: { match: FloorballMatch; players: Playe
             <textarea
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
-              onBlur={() => db.matches.update(match.id, { notes })}
+              onBlur={() => { void updateMatch(match.id, { notes }) }}
               placeholder="Заметка к матчу"
               maxLength={400}
             />
@@ -881,12 +901,12 @@ function SettingsPage() {
       <section className="card settings-list">
         <p>
           {isCloudSyncEnabled()
-            ? 'Игроки, матчи и журнал общие для всех, кто открывает сайт. Изменения с одного телефона появляются на других через пару секунд.'
+            ? 'Добавление, правка и удаление сразу пишутся в общее хранилище. Другие телефоны подтягивают это при открытии.'
             : 'Общая база сейчас выключена: данные остаются только на этом телефоне.'}
         </p>
         <label>
           <span><b>Финальный сигнал</b></span>
-          <input type="checkbox" checked={settings.soundEnabled} onChange={(event) => db.settings.put({ ...settings, soundEnabled: event.target.checked, id: 'main' })} />
+          <input type="checkbox" checked={settings.soundEnabled} onChange={(event) => { void saveSettings({ soundEnabled: event.target.checked }) }} />
         </label>
       </section>
       <section className="card backup-card">

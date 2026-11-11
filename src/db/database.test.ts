@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { applySharedState, clearAllData, db, exportBackup, importBackup } from './database'
+import { applySharedState, clearAllData, createPlayer, db, deletePlayer, exportBackup, importBackup, updatePlayer } from './database'
 import { DEFAULT_SETTINGS, type BackupPayload, type FloorballMatch, type Player } from '../domain/types'
 
 const player: Player = {
@@ -61,6 +61,14 @@ describe('backup restore', () => {
 
   it('rejects a damaged backup file', async () => {
     await expect(importBackup({ version: 2, players: [] })).rejects.toThrow(/резервную копию/)
+  })
+
+  it('creates updates and deletes a player in the local store', async () => {
+    await createPlayer(player)
+    await updatePlayer('p1', { name: 'Анна К.' })
+    expect((await db.players.get('p1'))?.name).toBe('Анна К.')
+    await deletePlayer('p1')
+    expect(await db.players.count()).toBe(0)
   })
 
   it('applies remote matches without wiping local players', async () => {
