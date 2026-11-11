@@ -39,13 +39,70 @@ function pickPlayer(left: Player, right: Player) {
   return rightTime >= leftTime ? right : left
 }
 
-export function fingerprint(payload: BackupPayload) {
-  return JSON.stringify({
-    players: [...payload.players].sort((left, right) => left.id.localeCompare(right.id)),
-    matches: [...payload.matches].sort((left, right) => left.id.localeCompare(right.id)),
-    settings: payload.settings,
+function normalizePlayer(player: Player): Player {
+  return {
+    id: player.id,
+    name: player.name,
+    note: player.note ?? '',
+    avatarId: player.avatarId ?? '',
+    active: player.active !== false,
+    createdAt: player.createdAt,
+  }
+}
+
+function normalizeMatch(match: FloorballMatch): FloorballMatch {
+  return {
+    id: match.id,
+    status: match.status,
+    redPlayerIds: [...(match.redPlayerIds ?? [])],
+    bluePlayerIds: [...(match.bluePlayerIds ?? [])],
+    periodCount: match.periodCount ?? match.currentPeriod ?? 0,
+    periodDurationSeconds: match.periodDurationSeconds ?? 0,
+    currentPeriod: match.currentPeriod ?? 0,
+    timer: {
+      durationSeconds: match.timer?.durationSeconds ?? 0,
+      remainingAtPause: match.timer?.remainingAtPause ?? 0,
+      startedAt: match.timer?.startedAt ?? null,
+      running: Boolean(match.timer?.running),
+    },
+    goals: (match.goals ?? []).map((goal) => ({
+      id: goal.id,
+      team: goal.team,
+      playerId: goal.playerId ?? null,
+      period: goal.period ?? 1,
+      elapsedSeconds: goal.elapsedSeconds ?? 0,
+      createdAt: goal.createdAt,
+    })),
+    notes: match.notes ?? '',
+    startedAt: match.startedAt,
+    endedAt: match.endedAt ?? null,
+  }
+}
+
+export function canonicalize(payload: BackupPayload): BackupPayload {
+  return {
+    version: 1,
+    exportedAt: payload.exportedAt || '',
+    players: [...payload.players].map(normalizePlayer).sort((left, right) => left.id.localeCompare(right.id)),
+    matches: [...payload.matches].map(normalizeMatch).sort((left, right) => left.id.localeCompare(right.id)),
+    settings: {
+      id: 'main',
+      periodMinutes: payload.settings?.periodMinutes || DEFAULT_SETTINGS.periodMinutes,
+      soundEnabled: payload.settings?.soundEnabled !== false,
+    },
     deletedPlayerIds: uniqueIds(payload.deletedPlayerIds).sort(),
     deletedMatchIds: uniqueIds(payload.deletedMatchIds).sort(),
+  }
+}
+
+export function fingerprint(payload: BackupPayload) {
+  const canonical = canonicalize(payload)
+  return JSON.stringify({
+    players: canonical.players,
+    matches: canonical.matches,
+    settings: canonical.settings,
+    deletedPlayerIds: canonical.deletedPlayerIds,
+    deletedMatchIds: canonical.deletedMatchIds,
   })
 }
 

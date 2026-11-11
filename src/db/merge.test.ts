@@ -104,4 +104,12 @@ describe('mergePayloads', () => {
     const right = payload({ players: [player('p1', 'Анна'), player('p2', 'Борис')] })
     expect(fingerprint(left)).toBe(fingerprint(right))
   })
+
+  it('ignores extra fields left by IndexedDB', () => {
+    const clean = payload({ matches: [match('m1')] })
+    const dirty = payload({
+      matches: [{ ...match('m1'), leftover: true } as FloorballMatch],
+    })
+    expect(fingerprint(clean)).toBe(fingerprint(dirty))
+  })
 })

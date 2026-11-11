@@ -18,7 +18,7 @@ import {
 } from 'react-router-dom'
 import { avatarById, pickAvatar } from './domain/avatars'
 import { clearAllData, db, exportBackup, getSettings, importBackup } from './db/database'
-import { getCloudSyncInfo, isCloudSyncEnabled } from './db/sync'
+import { flushCloudPush, getCloudSyncInfo, isCloudSyncEnabled } from './db/sync'
 import {
   goalsText,
   playedPeriods,
@@ -140,12 +140,12 @@ function SyncBadge() {
   if (!info.enabled) return null
   const label = !navigator.onLine
     ? 'офлайн'
-    : info.lastError
+    : info.lastError && !info.lastOkAt
       ? 'нет связи'
       : info.lastOkAt
         ? 'общая база'
         : 'синхронизация'
-  return <span className={`sync-pill ${info.lastError || !navigator.onLine ? 'warn' : ''}`}>{label}</span>
+  return <span className={`sync-pill ${(!navigator.onLine || (info.lastError && !info.lastOkAt)) ? 'warn' : ''}`}>{label}</span>
 }
 
 function PageHeading({ title, subtitle }: { title: string; subtitle?: string }) {
@@ -429,6 +429,7 @@ function MatchPage() {
       endedAt: new Date().toISOString(),
       timer: pauseTimer(activeMatch.timer),
     })
+    await flushCloudPush()
     navigate('/history')
   }
 

@@ -1,10 +1,11 @@
 import { DEFAULT_SETTINGS, type BackupPayload } from '../domain/types'
 import { db, importBackup, readTombstones } from './database'
-import { fingerprint, mergePayloads } from './merge'
+import { canonicalize, fingerprint, mergePayloads } from './merge'
 
 const DEFAULT_SYNC_URL = 'https://s3.regru.cloud/flor/state.json'
 const configuredUrl = import.meta.env.VITE_SYNC_URL
 const SYNC_URL = configuredUrl === '' ? '' : (configuredUrl || DEFAULT_SYNC_URL)
+const PUSH_COOLDOWN_MS = 1500
 
 let started = false
 let pushing = false
@@ -13,6 +14,7 @@ let paused = false
 let pendingPush = false
 let lastFingerprint = ''
 let lastOkAt = 0
+let lastPushAt = 0
 let lastError = ''
 let pushTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -37,12 +39,13 @@ export function getCloudSyncInfo() {
     enabled: canSync(),
     lastOkAt,
     lastError,
+    busy: pushing || pulling,
   }
 }
 
 async function readLocal(): Promise<BackupPayload> {
   const tombstones = readTombstones()
-  return {
+  return canonicalize({
     version: 1,
     exportedAt: new Date().toISOString(),
     players: await db.players.toArray(),
@@ -50,7 +53,7 @@ async function readLocal(): Promise<BackupPayload> {
     settings: (await db.settings.get('main')) ?? DEFAULT_SETTINGS,
     deletedPlayerIds: tombstones.players,
     deletedMatchIds: tombstones.matches,
-  }
+  })
 }
 
 function isPayload(value: unknown): value is BackupPayload {
@@ -66,11 +69,27 @@ function markOk(fp: string) {
   notify()
 }
 
+async function fetchSync(url: string, init: RequestInit, timeoutMs = 8000) {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
+function hasLiveMatch(payload: BackupPayload) {
+  return payload.matches.some((match) => match.status !== 'completed')
+}
+
 async function pull() {
   if (!canSync() || paused || pushing || pulling) return
+  if (lastPushAt && Date.now() - lastPushAt < PUSH_COOLDOWN_MS) return
   pulling = true
+  notify()
   try {
-    const response = await fetch(`${SYNC_URL}?t=${Date.now()}`, { cache: 'no-store', credentials: 'omit' })
+    const response = await fetchSync(`${SYNC_URL}?t=${Date.now()}`, { cache: 'no-store', credentials: 'omit' })
     if (response.status === 404) {
       pulling = false
       await push()
@@ -81,14 +100,15 @@ async function pull() {
       notify()
       return
     }
-    const remote = await response.json() as unknown
-    if (!isPayload(remote)) {
+    const remoteRaw = await response.json() as unknown
+    if (!isPayload(remoteRaw)) {
       lastError = 'Общая база вернула непонятные данные'
       notify()
       return
     }
     const localPayload = await readLocal()
-    const merged = mergePayloads(localPayload, remote)
+    const remote = canonicalize(remoteRaw)
+    const merged = canonicalize(mergePayloads(localPayload, remote))
     const remoteFp = fingerprint(remote)
     const localFp = fingerprint(localPayload)
     const mergedFp = fingerprint(merged)
@@ -96,23 +116,26 @@ async function pull() {
       markOk(mergedFp)
       return
     }
-    if (mergedFp !== localFp) {
+    if (mergedFp !== localFp && !hasLiveMatch(localPayload)) {
       paused = true
       await importBackup(merged)
-    }
-    if (mergedFp !== remoteFp) {
-      pulling = false
       paused = false
-      await push()
+    }
+    const latest = await readLocal()
+    const latestMerged = canonicalize(mergePayloads(latest, remote))
+    const latestFp = fingerprint(latestMerged)
+    if (latestFp !== fingerprint(remote)) {
+      await pushPayload(latestMerged)
       return
     }
-    markOk(mergedFp)
+    markOk(latestFp)
   } catch {
     lastError = 'Нет связи с общей базой'
     notify()
   } finally {
     paused = false
     pulling = false
+    notify()
     if (pendingPush) {
       pendingPush = false
       queueCloudPush()
@@ -120,33 +143,42 @@ async function pull() {
   }
 }
 
+async function pushPayload(payload: BackupPayload) {
+  if (!canSync() || paused) return
+  const canonical = canonicalize({ ...payload, exportedAt: new Date().toISOString() })
+  const fp = fingerprint(canonical)
+  if (fp === lastFingerprint) {
+    markOk(fp)
+    return
+  }
+  const response = await fetchSync(SYNC_URL, {
+    method: 'PUT',
+    cache: 'no-store',
+    credentials: 'omit',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(canonical),
+  })
+  if (response.ok) {
+    lastPushAt = Date.now()
+    markOk(fp)
+  } else {
+    lastError = `Не удалось записать в общую базу (${response.status})`
+    notify()
+  }
+}
+
 async function push() {
   if (!canSync() || paused || pushing) return
   pushing = true
+  notify()
   try {
-    const payload = await readLocal()
-    const fp = fingerprint(payload)
-    if (fp === lastFingerprint) return
-    const response = await fetch(SYNC_URL, {
-      method: 'PUT',
-      cache: 'no-store',
-      credentials: 'omit',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    })
-    if (response.ok) {
-      markOk(fp)
-    } else {
-      lastError = `Не удалось записать в общую базу (${response.status})`
-      notify()
-    }
+    await pushPayload(await readLocal())
   } catch {
     lastError = 'Нет связи с общей базой'
     notify()
   } finally {
     pushing = false
+    notify()
   }
 }
 
@@ -160,11 +192,26 @@ export function queueCloudPush() {
   pushTimer = setTimeout(() => { void push() }, 400)
 }
 
+export async function flushCloudPush() {
+  if (!canSync()) return
+  if (pushTimer) {
+    clearTimeout(pushTimer)
+    pushTimer = undefined
+  }
+  pendingPush = false
+  const startedWait = Date.now()
+  while ((paused || pulling || pushing) && Date.now() - startedWait < 8000) {
+    await new Promise((resolve) => window.setTimeout(resolve, 40))
+  }
+  paused = false
+  await push()
+}
+
 export function startCloudSync() {
   if (started || !canSync()) return
   started = true
   void pull()
-  window.setInterval(() => { void pull() }, 2500)
+  window.setInterval(() => { void pull() }, 4000)
   window.addEventListener('online', () => { void pull(); void push() })
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void pull()
